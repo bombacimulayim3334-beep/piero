@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Piero Aviator Bot — Admin Panel</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+  .header { background: #1e293b; padding: 20px 32px; border-bottom: 1px solid #334155; }
+  .header h1 { color: #38bdf8; font-size: 20px; }
+  .header p  { color: #94a3b8; font-size: 13px; margin-top: 4px; }
+  .container { max-width: 900px; margin: 0 auto; padding: 28px 20px; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 20px; margin-bottom: 20px; }
+  .card h2 { font-size: 15px; color: #94a3b8; margin-bottom: 16px; text-transform: uppercase; letter-spacing: .5px; }
+  label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 6px; }
+  input, textarea { width: 100%; background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 8px 12px; color: #e2e8f0; font-size: 13px; font-family: monospace; }
+  textarea { height: 100px; resize: vertical; }
+  input:focus, textarea:focus { outline: none; border-color: #38bdf8; }
+  .row { display: flex; gap: 12px; margin-bottom: 12px; }
+  .row > * { flex: 1; }
+  button { padding: 9px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; transition: opacity .15s; }
+  button:hover { opacity: .85; }
+  .btn-blue  { background: #0284c7; color: #fff; }
+  .btn-green { background: #16a34a; color: #fff; }
+  .btn-red   { background: #dc2626; color: #fff; }
+  .btn-gray  { background: #334155; color: #e2e8f0; }
+  .msg { margin-top: 10px; padding: 8px 12px; border-radius: 6px; font-size: 13px; display: none; }
+  .msg.ok  { background: #14532d; color: #86efac; display: block; }
+  .msg.err { background: #450a0a; color: #fca5a5; display: block; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 10px; background: #0f172a; color: #64748b; font-weight: 600; }
+  td { padding: 8px 10px; border-top: 1px solid #1e293b; font-family: monospace; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+  .badge.active   { background: #14532d; color: #86efac; }
+  .badge.inactive { background: #1e293b; color: #64748b; }
+  .reset-btn { background: none; border: 1px solid #dc2626; color: #f87171; padding: 3px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; }
+  .reset-btn:hover { background: #450a0a; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>✈ Piero Aviator Bot — Admin Panel</h1>
+  <p>Lisans yönetimi</p>
+</div>
+
+<div class="container">
+
+  <!-- Şifre -->
+  <div class="card">
+    <h2>Admin Girişi</h2>
+    <div class="row">
+      <div>
+        <label>Admin Şifresi</label>
+        <input type="password" id="adminPass" placeholder="Şifrenizi girin">
+      </div>
+      <div style="display:flex;align-items:flex-end">
+        <button class="btn-blue" onclick="loadLicenses()">Giriş Yap & Listele</button>
+      </div>
+    </div>
+    <div id="loginMsg" class="msg"></div>
+  </div>
+
+  <!-- Lisans Ekle -->
+  <div class="card">
+    <h2>Yeni Lisans Ekle</h2>
+    <div class="row">
+      <div>
+        <label>Lisans Anahtarları (her satıra bir anahtar — LisansUretici.ahk'tan kopyala)</label>
+        <textarea id="newKeys" placeholder="PIERO-1234-5678-9012&#10;PIERO-2345-6789-0123"></textarea>
+      </div>
+      <div>
+        <label>Not (isteğe bağlı — müşteri adı vb.)</label>
+        <input type="text" id="noteField" placeholder="Örn: Müşteri Ahmet">
+        <button class="btn-green" style="margin-top:10px;width:100%" onclick="addKeys()">Lisansları Ekle</button>
+      </div>
+    </div>
+    <div id="addMsg" class="msg"></div>
+  </div>
+
+  <!-- Lisans Sıfırla -->
+  <div class="card">
+    <h2>Lisans Sıfırla  (başka bilgisayara taşı)</h2>
+    <div class="row">
+      <div>
+        <label>Sıfırlanacak Lisans Anahtarı</label>
+        <input type="text" id="resetKey" placeholder="PIERO-0000-0000-0000">
+      </div>
+      <div style="display:flex;align-items:flex-end">
+        <button class="btn-red" onclick="resetKey()">Sıfırla</button>
+      </div>
+    </div>
+    <div id="resetMsg" class="msg"></div>
+  </div>
+
+  <!-- Lisans Listesi -->
+  <div class="card">
+    <h2>Lisans Listesi</h2>
+    <div id="licenseTable"><p style="color:#64748b;font-size:13px">Giriş yapın ve listeyi yükleyin.</p></div>
+  </div>
+
+</div>
+
+<script>
+const SERVER = window.location.origin; // Aynı sunucudan serve edildiğinde otomatik çalışır
+
+async function api(endpoint, body) {
+  const r = await fetch(SERVER + endpoint, {
+    method: body ? 'POST' : 'GET',
+    headers: {'Content-Type':'application/json'},
+    body: body ? JSON.stringify(body) : undefined
+  });
+  return r.json();
+}
+
+function showMsg(id, text, ok) {
+  const el = document.getElementById(id);
+  el.className = 'msg ' + (ok ? 'ok' : 'err');
+  el.textContent = text;
+}
+
+async function loadLicenses() {
+  const pass = document.getElementById('adminPass').value;
+  if (!pass) { showMsg('loginMsg','Şifre giriniz.',false); return; }
+  try {
+    const r = await fetch(SERVER + '/admin/list?password=' + encodeURIComponent(pass));
+    const d = await r.json();
+    if (!d.ok) { showMsg('loginMsg', d.msg || 'Hata', false); return; }
+    showMsg('loginMsg', d.total + ' lisans yüklendi.', true);
+    renderTable(d.licenses, pass);
+  } catch { showMsg('loginMsg','Sunucuya bağlanılamadı.',false); }
+}
+
+function renderTable(licenses, pass) {
+  if (!licenses.length) {
+    document.getElementById('licenseTable').innerHTML = '<p style="color:#64748b;font-size:13px">Henüz lisans yok.</p>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Anahtar</th><th>Durum</th><th>Aktive Tarihi</th><th>Not</th><th>İşlem</th></tr></thead><tbody>';
+  for (const l of licenses) {
+    html += `<tr>
+      <td>${l.key}</td>
+      <td><span class="badge ${l.activated?'active':'inactive'}">${l.activated?'Aktif':'Bekliyor'}</span></td>
+      <td>${l.activated_at ? l.activated_at.substring(0,16) : '—'}</td>
+      <td>${l.note || '—'}</td>
+      <td>${l.activated ? `<button class="reset-btn" onclick="doReset('${l.key}','${pass}')">Sıfırla</button>` : '—'}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  document.getElementById('licenseTable').innerHTML = html;
+}
+
+async function addKeys() {
+  const pass = document.getElementById('adminPass').value;
+  const raw  = document.getElementById('newKeys').value;
+  const note = document.getElementById('noteField').value;
+  const keys = raw.split('\n').map(k=>k.trim()).filter(k=>k);
+  if (!pass || !keys.length) { showMsg('addMsg','Şifre ve en az bir anahtar gerekli.',false); return; }
+  const d = await api('/admin/add', {password:pass, keys, note});
+  if (d.ok) {
+    showMsg('addMsg', `✓ ${d.added.length} eklendi. ${d.skipped.length} atlandı: ${d.skipped.join(', ')}`, true);
+    loadLicenses();
+  } else {
+    showMsg('addMsg', d.msg || 'Hata', false);
+  }
+}
+
+async function resetKey() {
+  const pass = document.getElementById('adminPass').value;
+  const key  = document.getElementById('resetKey').value.toUpperCase().trim();
+  if (!pass || !key) { showMsg('resetMsg','Şifre ve anahtar gerekli.',false); return; }
+  const d = await api('/admin/reset', {password:pass, key});
+  showMsg('resetMsg', d.msg || (d.ok?'Sıfırlandı':'Hata'), d.ok);
+  if (d.ok) loadLicenses();
+}
+
+async function doReset(key, pass) {
+  if (!confirm(key + ' sıfırlansın mı?')) return;
+  const d = await api('/admin/reset', {password:pass, key});
+  alert(d.msg);
+  loadLicenses();
+}
+</script>
+</body>
+</html>
