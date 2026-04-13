@@ -1,26 +1,14 @@
 """
 PIERO AVIATOR BOT - Lisans Sunucusu
-Railway / Render / Heroku'ya deploy edilir.
-
-Endpoints:
-  POST /activate  - Lisansı aktive et (ilk kullanım)
-  POST /check     - Lisans geçerli mi kontrol et
-  POST /admin/add - Yeni lisans ekle (admin şifresi gerekli)
-  GET  /admin/list - Tüm lisansları listele (admin şifresi gerekli)
 """
-
 from flask import Flask, request, jsonify
 import sqlite3, os, hashlib, datetime
 
 app = Flask(__name__)
 
-# Admin şifresi - deploy etmeden önce değiştir!
 ADMIN_PASSWORD = "piero2024admin"
 DB_PATH = "licenses.db"
 
-# ---------------------------------------------------------------
-#  VERİTABANI
-# ---------------------------------------------------------------
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -30,11 +18,14 @@ def init_db():
     conn = get_db()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS licenses (
-            key         TEXT PRIMARY KEY,
-            hwid        TEXT DEFAULT NULL,
-            activated   INTEGER DEFAULT 0,
+            key          TEXT PRIMARY KEY,
+            hwid         TEXT DEFAULT NULL,
+            activated    INTEGER DEFAULT 0,
             activated_at TEXT DEFAULT NULL,
-            note        TEXT DEFAULT NULL
+            last_opened  TEXT DEFAULT NULL,
+            last_runtime TEXT DEFAULT NULL,
+            total_runs   INTEGER DEFAULT 0,
+            note         TEXT DEFAULT NULL
         )
     """)
     conn.commit()
@@ -42,15 +33,15 @@ def init_db():
 
 init_db()
 
-# ---------------------------------------------------------------
-#  YARDIMCI
-# ---------------------------------------------------------------
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
 def hash_hwid(hwid):
-    """HwID'i hash'le - ham değeri saklamıyoruz"""
     return hashlib.sha256(hwid.encode()).hexdigest()[:32]
 
 def validate_key_format(key):
-    """PIERO-AAAA-BBBB-CCCC formatını doğrula"""
     parts = key.upper().split("-")
     if len(parts) != 4 or parts[0] != "PIERO":
         return False
@@ -60,156 +51,141 @@ def validate_key_format(key):
     except:
         return False
 
-# ---------------------------------------------------------------
-#  AKTİVASYON  (ilk kullanım - lisansı bu bilgisayara bağla)
-# ---------------------------------------------------------------
+# ── AKTİVASYON ──────────────────────────────────────────────────
 @app.route("/activate", methods=["POST"])
 def activate():
     data = request.get_json(silent=True) or {}
-    key  = str(data.get("key", "")).upper().strip()
+    key  = str(data.get("key",  "")).upper().strip()
     hwid = str(data.get("hwid", "")).strip()
-
     if not key or not hwid:
         return jsonify({"ok": False, "msg": "Eksik parametre"}), 400
-
     if not validate_key_format(key):
-        return jsonify({"ok": False, "msg": "Geçersiz lisans anahtarı formatı"}), 400
-
+        return jsonify({"ok": False, "msg": "Geçersiz lisans formatı"}), 400
     conn = get_db()
     row  = conn.execute("SELECT * FROM licenses WHERE key=?", (key,)).fetchone()
-
     if not row:
         conn.close()
-        return jsonify({"ok": False, "msg": "Bu lisans anahtarı sistemde bulunamadı"}), 404
-
+        return jsonify({"ok": False, "msg": "Lisans bulunamadı"}), 404
     hashed = hash_hwid(hwid)
-
     if row["activated"] == 1:
-        # Zaten aktive edilmiş — aynı bilgisayar mı?
         if row["hwid"] == hashed:
             conn.close()
-            return jsonify({"ok": True, "msg": "Zaten aktive edilmiş, giriş yapıldı"})
-        else:
-            conn.close()
-            return jsonify({"ok": False, "msg": "Bu lisans başka bir bilgisayarda aktive edilmiş"}), 403
-
-    # İlk aktivasyon
-    now = datetime.datetime.utcnow().isoformat()
-    conn.execute(
-        "UPDATE licenses SET hwid=?, activated=1, activated_at=? WHERE key=?",
-        (hashed, now, key)
-    )
+            return jsonify({"ok": True, "msg": "Giriş yapıldı"})
+        conn.close()
+        return jsonify({"ok": False, "msg": "Bu lisans başka bir bilgisayarda aktive edilmiş"}), 403
+    now = datetime.datetime.utcnow().isoformat(timespec="seconds")
+    conn.execute("UPDATE licenses SET hwid=?, activated=1, activated_at=? WHERE key=?", (hashed, now, key))
     conn.commit()
     conn.close()
-    return jsonify({"ok": True, "msg": "Lisans başarıyla aktive edildi"})
+    return jsonify({"ok": True, "msg": "Lisans aktive edildi"})
 
-# ---------------------------------------------------------------
-#  KONTROL  (her program açılışında)
-# ---------------------------------------------------------------
+# ── KONTROL ─────────────────────────────────────────────────────
 @app.route("/check", methods=["POST"])
 def check():
     data = request.get_json(silent=True) or {}
-    key  = str(data.get("key", "")).upper().strip()
+    key  = str(data.get("key",  "")).upper().strip()
     hwid = str(data.get("hwid", "")).strip()
-
     if not key or not hwid:
-        return jsonify({"ok": False, "msg": "Eksik parametre"}), 400
-
+        return jsonify({"ok": False}), 400
     conn   = get_db()
     row    = conn.execute("SELECT * FROM licenses WHERE key=?", (key,)).fetchone()
     conn.close()
-
     if not row or row["activated"] != 1:
-        return jsonify({"ok": False, "msg": "Lisans geçersiz veya aktive edilmemiş"}), 403
+        return jsonify({"ok": False, "msg": "Geçersiz lisans"}), 403
+    if row["hwid"] != hash_hwid(hwid):
+        return jsonify({"ok": False, "msg": "Bu bilgisayara ait değil"}), 403
+    return jsonify({"ok": True})
 
-    hashed = hash_hwid(hwid)
-    if row["hwid"] != hashed:
-        return jsonify({"ok": False, "msg": "Lisans bu bilgisayara ait değil"}), 403
+# ── LOG (kapanışta çalışma süresi) ──────────────────────────────
+@app.route("/log", methods=["POST"])
+def log_event():
+    data     = request.get_json(silent=True) or {}
+    key      = str(data.get("key",      "")).upper().strip()
+    hwid     = str(data.get("hwid",     "")).strip()
+    duration = str(data.get("duration", "")).strip()
+    opened   = str(data.get("opened_at","")).strip()
+    if not key:
+        return jsonify({"ok": False}), 400
+    conn = get_db()
+    row  = conn.execute("SELECT * FROM licenses WHERE key=?", (key,)).fetchone()
+    if not row or row["activated"] != 1 or row["hwid"] != hash_hwid(hwid):
+        conn.close()
+        return jsonify({"ok": False}), 403
+    conn.execute("""
+        UPDATE licenses
+        SET last_opened=?, last_runtime=?, total_runs=total_runs+1
+        WHERE key=?
+    """, (opened, duration, key))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
 
-    return jsonify({"ok": True, "msg": "Lisans geçerli"})
-
-# ---------------------------------------------------------------
-#  ADMİN — Lisans Ekle
-# ---------------------------------------------------------------
+# ── ADMİN: Lisans Ekle ──────────────────────────────────────────
 @app.route("/admin/add", methods=["POST"])
 def admin_add():
     data = request.get_json(silent=True) or {}
     if data.get("password") != ADMIN_PASSWORD:
-        return jsonify({"ok": False, "msg": "Yetkisiz erişim"}), 401
-
+        return jsonify({"ok": False, "msg": "Yetkisiz"}), 401
     keys = data.get("keys", [])
     note = data.get("note", "")
-    if not keys:
-        return jsonify({"ok": False, "msg": "Anahtar listesi boş"}), 400
-
-    conn    = get_db()
-    added   = []
-    skipped = []
-
+    conn = get_db()
+    added, skipped = [], []
     for key in keys:
         key = key.upper().strip()
         if not validate_key_format(key):
             skipped.append(key + " (format hatası)")
             continue
-        existing = conn.execute("SELECT key FROM licenses WHERE key=?", (key,)).fetchone()
-        if existing:
+        if conn.execute("SELECT key FROM licenses WHERE key=?", (key,)).fetchone():
             skipped.append(key + " (zaten var)")
             continue
         conn.execute("INSERT INTO licenses (key, note) VALUES (?, ?)", (key, note))
         added.append(key)
-
     conn.commit()
     conn.close()
     return jsonify({"ok": True, "added": added, "skipped": skipped})
 
-# ---------------------------------------------------------------
-#  ADMİN — Lisansları Listele
-# ---------------------------------------------------------------
+# ── ADMİN: Listele ──────────────────────────────────────────────
 @app.route("/admin/list", methods=["GET"])
 def admin_list():
-    password = request.args.get("password", "")
-    if password != ADMIN_PASSWORD:
-        return jsonify({"ok": False, "msg": "Yetkisiz erişim"}), 401
-
+    if request.args.get("password") != ADMIN_PASSWORD:
+        return jsonify({"ok": False, "msg": "Yetkisiz"}), 401
     conn = get_db()
-    rows = conn.execute("SELECT key, activated, activated_at, note FROM licenses ORDER BY activated_at DESC").fetchall()
+    rows = conn.execute("SELECT * FROM licenses ORDER BY activated_at DESC").fetchall()
     conn.close()
-
-    result = []
-    for r in rows:
-        result.append({
-            "key":          r["key"],
-            "activated":    bool(r["activated"]),
-            "activated_at": r["activated_at"],
-            "note":         r["note"]
-        })
+    result = [{
+        "key":          r["key"],
+        "activated":    bool(r["activated"]),
+        "activated_at": r["activated_at"],
+        "last_opened":  r["last_opened"],
+        "last_runtime": r["last_runtime"],
+        "total_runs":   r["total_runs"],
+        "note":         r["note"]
+    } for r in rows]
     return jsonify({"ok": True, "total": len(result), "licenses": result})
 
-# ---------------------------------------------------------------
-#  ADMİN — Lisansı Sıfırla (başka bilgisayara taşı)
-# ---------------------------------------------------------------
+# ── ADMİN: Sıfırla ──────────────────────────────────────────────
 @app.route("/admin/reset", methods=["POST"])
 def admin_reset():
     data = request.get_json(silent=True) or {}
     if data.get("password") != ADMIN_PASSWORD:
-        return jsonify({"ok": False, "msg": "Yetkisiz erişim"}), 401
-
+        return jsonify({"ok": False, "msg": "Yetkisiz"}), 401
     key  = str(data.get("key", "")).upper().strip()
     conn = get_db()
-    row  = conn.execute("SELECT key FROM licenses WHERE key=?", (key,)).fetchone()
-    if not row:
+    if not conn.execute("SELECT key FROM licenses WHERE key=?", (key,)).fetchone():
         conn.close()
         return jsonify({"ok": False, "msg": "Lisans bulunamadı"}), 404
-
     conn.execute("UPDATE licenses SET hwid=NULL, activated=0, activated_at=NULL WHERE key=?", (key,))
     conn.commit()
     conn.close()
-    return jsonify({"ok": True, "msg": key + " sıfırlandı, yeniden aktive edilebilir"})
+    return jsonify({"ok": True, "msg": key + " sıfırlandı"})
 
-# Admin paneli serve et
+# ── ADMİN PANELİ ────────────────────────────────────────────────
 @app.route("/admin")
 def admin_panel():
-    with open(os.path.join(os.path.dirname(__file__), "admin.html"), "r", encoding="utf-8") as f:
+    html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admin.html")
+    if not os.path.exists(html_path):
+        return "admin.html bulunamadı.", 404
+    with open(html_path, "r", encoding="utf-8") as f:
         return f.read(), 200, {"Content-Type": "text/html; charset=utf-8"}
 
 if __name__ == "__main__":
