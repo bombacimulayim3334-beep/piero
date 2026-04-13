@@ -26,7 +26,21 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+def init_db():
+    conn = get_db()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS licenses (
+            key         TEXT PRIMARY KEY,
+            hwid        TEXT DEFAULT NULL,
+            activated   INTEGER DEFAULT 0,
+            activated_at TEXT DEFAULT NULL,
+            note        TEXT DEFAULT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
 
+init_db()
 
 # ---------------------------------------------------------------
 #  YARDIMCI
@@ -191,70 +205,6 @@ def admin_reset():
     conn.commit()
     conn.close()
     return jsonify({"ok": True, "msg": key + " sıfırlandı, yeniden aktive edilebilir"})
-
-# ---------------------------------------------------------------
-#  OTURUM LOGU  (program tarafından çağrılır)
-# ---------------------------------------------------------------
-@app.route("/log", methods=["POST"])
-def log_event():
-    data  = request.get_json(silent=True) or {}
-    key   = str(data.get("key",    "")).upper().strip()
-    hwid  = str(data.get("hwid",   "")).strip()
-    event = str(data.get("event",  "")).strip()   # open / close / ping
-    detail = str(data.get("detail","")).strip()   # opsiyonel detay
-
-    if not key or not event:
-        return jsonify({"ok": False}), 400
-
-    # Lisans geçerli mi kontrol et
-    conn = get_db()
-    row  = conn.execute("SELECT * FROM licenses WHERE key=?", (key,)).fetchone()
-    if not row or row["activated"] != 1:
-        conn.close()
-        return jsonify({"ok": False, "msg": "Geçersiz lisans"}), 403
-
-    hashed = hash_hwid(hwid)
-    if row["hwid"] != hashed:
-        conn.close()
-        return jsonify({"ok": False, "msg": "HwID uyuşmuyor"}), 403
-
-    now = datetime.datetime.utcnow().isoformat(timespec="seconds")
-    conn.execute(
-        "INSERT INTO session_logs (key, event, ts, detail) VALUES (?, ?, ?, ?)",
-        (key, event, now, detail)
-    )
-    conn.commit()
-    conn.close()
-    return jsonify({"ok": True})
-
-# ---------------------------------------------------------------
-#  ADMİN — Logları Getir
-# ---------------------------------------------------------------
-@app.route("/admin/logs", methods=["GET"])
-def admin_logs():
-    password = request.args.get("password", "")
-    key      = request.args.get("key", "")
-    limit    = int(request.args.get("limit", 200))
-
-    if password != ADMIN_PASSWORD:
-        return jsonify({"ok": False, "msg": "Yetkisiz"}), 401
-
-    conn = get_db()
-    if key:
-        rows = conn.execute(
-            "SELECT * FROM session_logs WHERE key=? ORDER BY ts DESC LIMIT ?",
-            (key.upper(), limit)
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM session_logs ORDER BY ts DESC LIMIT ?",
-            (limit,)
-        ).fetchall()
-    conn.close()
-
-    result = [{"id": r["id"], "key": r["key"], "event": r["event"],
-               "ts": r["ts"], "detail": r["detail"]} for r in rows]
-    return jsonify({"ok": True, "total": len(result), "logs": result})
 
 # Admin paneli serve et
 @app.route("/admin")
