@@ -100,6 +100,23 @@
     <div id="licenseTable"><p style="color:#64748b;font-size:13px">Giriş yapın ve listeyi yükleyin.</p></div>
   </div>
 
+  <!-- Oturum Logları -->
+  <div class="card">
+    <h2>Oturum Logları</h2>
+    <div class="row" style="margin-bottom:12px">
+      <div>
+        <label>Lisans Anahtarı ile Filtrele (boş bırakırsan hepsi)</label>
+        <input type="text" id="logKeyFilter" placeholder="PIERO-0000-0000-0000  (veya boş)">
+      </div>
+      <div style="display:flex;align-items:flex-end;gap:8px">
+        <button class="btn-blue" onclick="loadLogs()">Logları Yükle</button>
+        <button class="btn-gray" onclick="exportLogs()">CSV İndir</button>
+      </div>
+    </div>
+    <div id="logMsg" class="msg"></div>
+    <div id="logTable"><p style="color:#64748b;font-size:13px">Logları yüklemek için butona tıklayın.</p></div>
+  </div>
+
 </div>
 
 <script>
@@ -180,6 +197,67 @@ async function doReset(key, pass) {
   const d = await api('/admin/reset', {password:pass, key});
   alert(d.msg);
   loadLicenses();
+}
+
+let allLogs = [];
+
+async function loadLogs() {
+  const pass   = document.getElementById('adminPass').value;
+  const keyF   = document.getElementById('logKeyFilter').value.trim();
+  if (!pass) { showMsg('logMsg','Önce admin şifresini girin.',false); return; }
+
+  try {
+    let url = SERVER + '/admin/logs?password=' + encodeURIComponent(pass) + '&limit=500';
+    if (keyF) url += '&key=' + encodeURIComponent(keyF);
+    const r = await fetch(url);
+    const d = await r.json();
+    if (!d.ok) { showMsg('logMsg', d.msg || 'Hata', false); return; }
+    allLogs = d.logs;
+    showMsg('logMsg', d.total + ' kayıt yüklendi.', true);
+    renderLogs(d.logs);
+  } catch { showMsg('logMsg','Sunucuya bağlanılamadı.',false); }
+}
+
+function renderLogs(logs) {
+  if (!logs.length) {
+    document.getElementById('logTable').innerHTML = '<p style="color:#64748b;font-size:13px">Kayıt bulunamadı.</p>';
+    return;
+  }
+
+  // Oturumları grupla (open→close arası süreyi hesapla)
+  let html = '<table><thead><tr><th>#</th><th>Lisans</th><th>Olay</th><th>Tarih/Saat (UTC)</th><th>Detay</th></tr></thead><tbody>';
+  for (const l of logs) {
+    const evColor = l.event === 'open'  ? '#86efac' :
+                    l.event === 'close' ? '#fca5a5' :
+                    l.event === 'ping'  ? '#93c5fd' : '#e2e8f0';
+    const evLabel = l.event === 'open'  ? '▶ Açıldı' :
+                    l.event === 'close' ? '■ Kapandı' :
+                    l.event === 'ping'  ? '⏱ Ping' : l.event;
+    html += `<tr>
+      <td style="color:#64748b">${l.id}</td>
+      <td style="font-size:11px">${l.key}</td>
+      <td><span style="color:${evColor};font-weight:600">${evLabel}</span></td>
+      <td>${l.ts.replace('T',' ')}</td>
+      <td style="color:#94a3b8;font-size:12px">${l.detail || '—'}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  document.getElementById('logTable').innerHTML = html;
+}
+
+function exportLogs() {
+  if (!allLogs.length) { alert('Önce logları yükleyin.'); return; }
+  let csv = 'ID,Lisans,Olay,Tarih,Detay
+';
+  for (const l of allLogs) {
+    csv += `${l.id},"${l.key}","${l.event}","${l.ts}","${l.detail||''}"
+`;
+  }
+  const blob = new Blob([csv], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'piero_logs.csv';
+  a.click();
 }
 </script>
 </body>
