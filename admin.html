@@ -105,6 +105,22 @@ tr:hover td { background: #162032; }
     <div id="licenseTable"><p style="color:#475569;font-size:12px">Giriş yapın.</p></div>
   </div>
 
+  <!-- Oturum Geçmişi -->
+  <div class="card">
+    <h2>Oturum Geçmişi</h2>
+    <div class="row" style="margin-bottom:10px">
+      <div>
+        <label>Lisans Filtrele (boş = hepsi)</label>
+        <input type="text" id="sessKeyFilter" placeholder="PIERO-0000-0000-0000">
+      </div>
+      <div style="display:flex;align-items:flex-end;gap:8px">
+        <button class="btn-blue" onclick="loadSessions()">Oturumları Yükle</button>
+      </div>
+    </div>
+    <div id="sessionMsg" class="msg"></div>
+    <div id="sessionTable"><p style="color:#475569;font-size:12px">Yüklemek için butona tıklayın.</p></div>
+  </div>
+
 </div>
 <script>
 const SERVER = window.location.origin;
@@ -149,17 +165,20 @@ function renderTable(licenses, pass) {
   }
   let html = `<table><thead><tr>
     <th>Anahtar</th><th>Durum</th><th>Aktive Tarihi</th>
-    <th>Son Açılış</th><th>Son Süre</th><th>Çalışma Sayısı</th>
-    <th>Not</th><th></th>
+    <th>Son Açılış</th><th>Son Süre</th><th>Son Kâr</th>
+    <th>Çalışma</th><th>Toplam Kâr</th><th>Not</th><th></th>
   </tr></thead><tbody>`;
   for (const l of licenses) {
+    const profitColor = (l.total_profit||0) >= 0 ? '#34d399' : '#f87171';
     html += `<tr>
       <td class="mono">${l.key}</td>
       <td><span class="badge ${l.activated?'active':'inactive'}">${l.activated?'Aktif':'Bekliyor'}</span></td>
       <td class="mono">${l.activated_at?l.activated_at.replace('T',' '):'—'}</td>
       <td class="mono" style="color:#cbd5e1">${l.last_opened||'—'}</td>
-      <td class="mono" style="color:#34d399;font-weight:600">${l.last_runtime||'—'}</td>
+      <td class="mono" style="color:#34d399">${l.last_runtime||'—'}</td>
+      <td class="mono" style="color:#fbbf24">${l.last_profit||'—'}</td>
       <td style="text-align:center;color:#38bdf8;font-weight:700">${l.total_runs||0}</td>
+      <td class="mono" style="color:${profitColor};font-weight:700">${(l.total_profit||0)>=0?'+':''}${(l.total_profit||0).toFixed(2)} TL</td>
       <td style="color:#64748b;font-size:11px">${l.note||'—'}</td>
       <td>${l.activated?`<button class="reset-btn" onclick="doReset('${l.key}','${pass}')">Sıfırla</button>`:'—'}</td>
     </tr>`;
@@ -186,6 +205,41 @@ async function doResetField() {
   const d = await api('/admin/reset',{password:pass,key});
   showMsg('resetMsg',d.msg||(d.ok?'Sıfırlandı':'Hata'),d.ok);
   if(d.ok)loadLicenses();
+}
+
+async function loadSessions() {
+  const pass = document.getElementById('adminPass').value;
+  const keyF = document.getElementById('sessKeyFilter').value.trim();
+  if (!pass) { showMsg('sessionMsg','Önce admin şifresini girin.',false); return; }
+  try {
+    let url = SERVER + '/admin/sessions?password=' + encodeURIComponent(pass) + '&limit=200';
+    if (keyF) url += '&key=' + encodeURIComponent(keyF);
+    const r = await fetch(url);
+    const d = await r.json();
+    if (!d.ok) { showMsg('sessionMsg', d.msg||'Hata', false); return; }
+    showMsg('sessionMsg', d.total + ' oturum yüklendi.', true);
+    if (!d.sessions.length) {
+      document.getElementById('sessionTable').innerHTML = '<p style="color:#475569;font-size:12px">Oturum yok.</p>';
+      return;
+    }
+    let html = `<table><thead><tr>
+      <th>#</th><th>Lisans</th><th>Açılış</th><th>Süre</th><th>Kâr</th><th>Kaydedildi</th>
+    </tr></thead><tbody>`;
+    for (const s of d.sessions) {
+      const pc = (s.profit||0) >= 0 ? '#34d399' : '#f87171';
+      const ps = ((s.profit||0) >= 0 ? '+' : '') + (s.profit||0).toFixed(2) + ' TL';
+      html += `<tr>
+        <td style="color:#64748b">${s.id}</td>
+        <td class="mono" style="font-size:10px">${s.key}</td>
+        <td class="mono">${s.opened_at||'—'}</td>
+        <td class="mono" style="color:#34d399">${s.duration||'—'}</td>
+        <td class="mono" style="color:${pc};font-weight:700">${ps}</td>
+        <td class="mono" style="color:#64748b;font-size:10px">${(s.logged_at||'').replace('T',' ')}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    document.getElementById('sessionTable').innerHTML = html;
+  } catch { showMsg('sessionMsg','Sunucuya bağlanılamadı.',false); }
 }
 
 async function doReset(key,pass) {

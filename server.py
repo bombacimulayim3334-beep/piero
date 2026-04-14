@@ -24,8 +24,20 @@ def init_db():
             activated_at TEXT DEFAULT NULL,
             last_opened  TEXT DEFAULT NULL,
             last_runtime TEXT DEFAULT NULL,
+            last_profit  TEXT DEFAULT NULL,
             total_runs   INTEGER DEFAULT 0,
+            total_profit REAL DEFAULT 0,
             note         TEXT DEFAULT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            key        TEXT NOT NULL,
+            opened_at  TEXT,
+            duration   TEXT,
+            profit     REAL DEFAULT 0,
+            logged_at  TEXT
         )
     """)
     conn.commit()
@@ -104,6 +116,7 @@ def log_event():
     hwid     = str(data.get("hwid",     "")).strip()
     duration = str(data.get("duration", "")).strip()
     opened   = str(data.get("opened_at","")).strip()
+    profit   = float(data.get("profit", 0))
     if not key:
         return jsonify({"ok": False}), 400
     conn = get_db()
@@ -111,11 +124,18 @@ def log_event():
     if not row or row["activated"] != 1 or row["hwid"] != hash_hwid(hwid):
         conn.close()
         return jsonify({"ok": False}), 403
+    now = datetime.datetime.utcnow().isoformat(timespec="seconds")
+    profit_str = ("+" if profit >= 0 else "") + str(round(profit, 2)) + " TL"
     conn.execute("""
         UPDATE licenses
-        SET last_opened=?, last_runtime=?, total_runs=total_runs+1
+        SET last_opened=?, last_runtime=?, last_profit=?,
+            total_runs=total_runs+1, total_profit=total_profit+?
         WHERE key=?
-    """, (opened, duration, key))
+    """, (opened, duration, profit_str, profit, key))
+    conn.execute("""
+        INSERT INTO sessions (key, opened_at, duration, profit, logged_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (key, opened, duration, profit, now))
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
@@ -158,7 +178,9 @@ def admin_list():
         "activated_at": r["activated_at"],
         "last_opened":  r["last_opened"],
         "last_runtime": r["last_runtime"],
+        "last_profit":  r["last_profit"],
         "total_runs":   r["total_runs"],
+        "total_profit": round(r["total_profit"] or 0, 2),
         "note":         r["note"]
     } for r in rows]
     return jsonify({"ok": True, "total": len(result), "licenses": result})
