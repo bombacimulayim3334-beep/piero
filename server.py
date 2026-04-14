@@ -2,13 +2,17 @@
 PIERO AVIATOR BOT - Lisans Sunucusu
 """
 from flask import Flask, request, jsonify
-import sqlite3, os, hashlib, datetime
+import sqlite3, os, hashlib, datetime, pathlib, json
 
 app = Flask(__name__)
 
 ADMIN_PASSWORD = "piero2024admin"
-DB_PATH = "licenses.db"
 
+# Railway /data volume varsa onu kullan (kalıcı), yoksa local
+_data_dir = pathlib.Path("/data") if pathlib.Path("/data").exists() else pathlib.Path(".")
+DB_PATH = str(_data_dir / "licenses.db")
+
+# ── VERİTABANI ──────────────────────────────────────────────────────────────
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -18,16 +22,16 @@ def init_db():
     conn = get_db()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS licenses (
-            key          TEXT PRIMARY KEY,
-            hwid         TEXT DEFAULT NULL,
-            activated    INTEGER DEFAULT 0,
-            activated_at TEXT DEFAULT NULL,
-            last_opened  TEXT DEFAULT NULL,
-            last_runtime TEXT DEFAULT NULL,
-            last_profit  TEXT DEFAULT NULL,
-            total_runs   INTEGER DEFAULT 0,
-            total_profit REAL DEFAULT 0,
-            note         TEXT DEFAULT NULL
+            key           TEXT PRIMARY KEY,
+            hwid          TEXT DEFAULT NULL,
+            activated     INTEGER DEFAULT 0,
+            activated_at  TEXT DEFAULT NULL,
+            last_opened   TEXT DEFAULT NULL,
+            last_runtime  TEXT DEFAULT NULL,
+            last_profit   TEXT DEFAULT NULL,
+            total_runs    INTEGER DEFAULT 0,
+            total_profit  REAL DEFAULT 0,
+            note          TEXT DEFAULT NULL
         )
     """)
     conn.execute("""
@@ -45,15 +49,10 @@ def init_db():
 
 init_db()
 
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
 def hash_hwid(hwid):
     return hashlib.sha256(hwid.encode()).hexdigest()[:32]
 
-def validate_key_format(key):
+def validate_key(key):
     parts = key.upper().split("-")
     if len(parts) != 4 or parts[0] != "PIERO":
         return False
@@ -63,7 +62,7 @@ def validate_key_format(key):
     except:
         return False
 
-# ── AKTİVASYON ──────────────────────────────────────────────────
+# ── AKTİVASYON ──────────────────────────────────────────────────────────────
 @app.route("/activate", methods=["POST"])
 def activate():
     data = request.get_json(silent=True) or {}
@@ -71,7 +70,7 @@ def activate():
     hwid = str(data.get("hwid", "")).strip()
     if not key or not hwid:
         return jsonify({"ok": False, "msg": "Eksik parametre"}), 400
-    if not validate_key_format(key):
+    if not validate_key(key):
         return jsonify({"ok": False, "msg": "Geçersiz lisans formatı"}), 400
     conn = get_db()
     row  = conn.execute("SELECT * FROM licenses WHERE key=?", (key,)).fetchone()
@@ -91,7 +90,7 @@ def activate():
     conn.close()
     return jsonify({"ok": True, "msg": "Lisans aktive edildi"})
 
-# ── KONTROL ─────────────────────────────────────────────────────
+# ── KONTROL ─────────────────────────────────────────────────────────────────
 @app.route("/check", methods=["POST"])
 def check():
     data = request.get_json(silent=True) or {}
@@ -99,8 +98,8 @@ def check():
     hwid = str(data.get("hwid", "")).strip()
     if not key or not hwid:
         return jsonify({"ok": False}), 400
-    conn   = get_db()
-    row    = conn.execute("SELECT * FROM licenses WHERE key=?", (key,)).fetchone()
+    conn = get_db()
+    row  = conn.execute("SELECT * FROM licenses WHERE key=?", (key,)).fetchone()
     conn.close()
     if not row or row["activated"] != 1:
         return jsonify({"ok": False, "msg": "Geçersiz lisans"}), 403
@@ -108,15 +107,15 @@ def check():
         return jsonify({"ok": False, "msg": "Bu bilgisayara ait değil"}), 403
     return jsonify({"ok": True})
 
-# ── LOG (kapanışta çalışma süresi) ──────────────────────────────
+# ── LOG (kapanışta süre + kâr) ───────────────────────────────────────────────
 @app.route("/log", methods=["POST"])
 def log_event():
     data     = request.get_json(silent=True) or {}
-    key      = str(data.get("key",      "")).upper().strip()
-    hwid     = str(data.get("hwid",     "")).strip()
-    duration = str(data.get("duration", "")).strip()
-    opened   = str(data.get("opened_at","")).strip()
-    profit   = float(data.get("profit", 0))
+    key      = str(data.get("key",       "")).upper().strip()
+    hwid     = str(data.get("hwid",      "")).strip()
+    duration = str(data.get("duration",  "")).strip()
+    opened   = str(data.get("opened_at", "")).strip()
+    profit   = float(data.get("profit",  0))
     if not key:
         return jsonify({"ok": False}), 400
     conn = get_db()
@@ -124,7 +123,7 @@ def log_event():
     if not row or row["activated"] != 1 or row["hwid"] != hash_hwid(hwid):
         conn.close()
         return jsonify({"ok": False}), 403
-    now = datetime.datetime.utcnow().isoformat(timespec="seconds")
+    now        = datetime.datetime.utcnow().isoformat(timespec="seconds")
     profit_str = ("+" if profit >= 0 else "") + str(round(profit, 2)) + " TL"
     conn.execute("""
         UPDATE licenses
@@ -140,7 +139,7 @@ def log_event():
     conn.close()
     return jsonify({"ok": True})
 
-# ── ADMİN: Lisans Ekle ──────────────────────────────────────────
+# ── ADMİN: Lisans Ekle ──────────────────────────────────────────────────────
 @app.route("/admin/add", methods=["POST"])
 def admin_add():
     data = request.get_json(silent=True) or {}
@@ -152,7 +151,7 @@ def admin_add():
     added, skipped = [], []
     for key in keys:
         key = key.upper().strip()
-        if not validate_key_format(key):
+        if not validate_key(key):
             skipped.append(key + " (format hatası)")
             continue
         if conn.execute("SELECT key FROM licenses WHERE key=?", (key,)).fetchone():
@@ -164,7 +163,7 @@ def admin_add():
     conn.close()
     return jsonify({"ok": True, "added": added, "skipped": skipped})
 
-# ── ADMİN: Listele ──────────────────────────────────────────────
+# ── ADMİN: Listele ──────────────────────────────────────────────────────────
 @app.route("/admin/list", methods=["GET"])
 def admin_list():
     if request.args.get("password") != ADMIN_PASSWORD:
@@ -185,7 +184,7 @@ def admin_list():
     } for r in rows]
     return jsonify({"ok": True, "total": len(result), "licenses": result})
 
-# ── ADMİN: Sıfırla ──────────────────────────────────────────────
+# ── ADMİN: Lisans Sıfırla (başka bilgisayara taşı) ─────────────────────────
 @app.route("/admin/reset", methods=["POST"])
 def admin_reset():
     data = request.get_json(silent=True) or {}
@@ -199,9 +198,103 @@ def admin_reset():
     conn.execute("UPDATE licenses SET hwid=NULL, activated=0, activated_at=NULL WHERE key=?", (key,))
     conn.commit()
     conn.close()
-    return jsonify({"ok": True, "msg": key + " sıfırlandı"})
+    return jsonify({"ok": True, "msg": key + " sıfırlandı (başka bilgisayara aktive edilebilir)"})
 
-# ── ADMİN PANELİ ────────────────────────────────────────────────
+# ── ADMİN: İstatistik Sıfırla (kâr, süre, oturum) ─────────────────────────
+@app.route("/admin/resetstats", methods=["POST"])
+def admin_resetstats():
+    data = request.get_json(silent=True) or {}
+    if data.get("password") != ADMIN_PASSWORD:
+        return jsonify({"ok": False, "msg": "Yetkisiz"}), 401
+    key  = str(data.get("key", "")).upper().strip()
+    conn = get_db()
+    if not conn.execute("SELECT key FROM licenses WHERE key=?", (key,)).fetchone():
+        conn.close()
+        return jsonify({"ok": False, "msg": "Lisans bulunamadı"}), 404
+    conn.execute("""
+        UPDATE licenses
+        SET last_opened=NULL, last_runtime=NULL, last_profit=NULL,
+            total_runs=0, total_profit=0
+        WHERE key=?
+    """, (key,))
+    conn.execute("DELETE FROM sessions WHERE key=?", (key,))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "msg": key + " istatistikleri sıfırlandı"})
+
+# ── ADMİN: Oturum Geçmişi ───────────────────────────────────────────────────
+@app.route("/admin/sessions", methods=["GET"])
+def admin_sessions():
+    if request.args.get("password") != ADMIN_PASSWORD:
+        return jsonify({"ok": False, "msg": "Yetkisiz"}), 401
+    key   = request.args.get("key", "")
+    limit = int(request.args.get("limit", 200))
+    conn  = get_db()
+    if key:
+        rows = conn.execute(
+            "SELECT * FROM sessions WHERE key=? ORDER BY logged_at DESC LIMIT ?",
+            (key.upper(), limit)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM sessions ORDER BY logged_at DESC LIMIT ?",
+            (limit,)).fetchall()
+    conn.close()
+    result = [{
+        "id":        r["id"],
+        "key":       r["key"],
+        "opened_at": r["opened_at"],
+        "duration":  r["duration"],
+        "profit":    round(r["profit"] or 0, 2),
+        "logged_at": r["logged_at"]
+    } for r in rows]
+    return jsonify({"ok": True, "total": len(result), "sessions": result})
+
+# ── ADMİN: Yedekle ─────────────────────────────────────────────────────────
+@app.route("/admin/export", methods=["GET"])
+def admin_export():
+    if request.args.get("password") != ADMIN_PASSWORD:
+        return jsonify({"ok": False, "msg": "Yetkisiz"}), 401
+    conn     = get_db()
+    licenses = [dict(r) for r in conn.execute("SELECT * FROM licenses").fetchall()]
+    sessions = [dict(r) for r in conn.execute("SELECT * FROM sessions").fetchall()]
+    conn.close()
+    return jsonify({"ok": True, "licenses": licenses, "sessions": sessions})
+
+# ── ADMİN: Geri Yükle ───────────────────────────────────────────────────────
+@app.route("/admin/import", methods=["POST"])
+def admin_import():
+    data = request.get_json(silent=True) or {}
+    if data.get("password") != ADMIN_PASSWORD:
+        return jsonify({"ok": False, "msg": "Yetkisiz"}), 401
+    licenses = data.get("licenses", [])
+    conn = get_db()
+    added, updated = 0, 0
+    for lic in licenses:
+        existing = conn.execute("SELECT key FROM licenses WHERE key=?", (lic["key"],)).fetchone()
+        if existing:
+            conn.execute("""
+                UPDATE licenses SET hwid=?, activated=?, activated_at=?,
+                last_opened=?, last_runtime=?, last_profit=?,
+                total_runs=?, total_profit=?, note=?
+                WHERE key=?
+            """, (lic.get("hwid"), lic.get("activated", 0), lic.get("activated_at"),
+                  lic.get("last_opened"), lic.get("last_runtime"), lic.get("last_profit"),
+                  lic.get("total_runs", 0), lic.get("total_profit", 0), lic.get("note"), lic["key"]))
+            updated += 1
+        else:
+            conn.execute("""
+                INSERT INTO licenses
+                (key,hwid,activated,activated_at,last_opened,last_runtime,last_profit,total_runs,total_profit,note)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+            """, (lic["key"], lic.get("hwid"), lic.get("activated", 0), lic.get("activated_at"),
+                  lic.get("last_opened"), lic.get("last_runtime"), lic.get("last_profit"),
+                  lic.get("total_runs", 0), lic.get("total_profit", 0), lic.get("note")))
+            added += 1
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "added": added, "updated": updated})
+
+# ── ADMİN PANELİ ────────────────────────────────────────────────────────────
 @app.route("/admin")
 def admin_panel():
     html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admin.html")

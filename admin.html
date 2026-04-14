@@ -105,6 +105,23 @@ tr:hover td { background: #162032; }
     <div id="licenseTable"><p style="color:#475569;font-size:12px">Giriş yapın.</p></div>
   </div>
 
+  <!-- Yedek / Geri Yükle -->
+  <div class="card">
+    <h2>Yedekleme / Geri Yükleme</h2>
+    <div class="row">
+      <div>
+        <button class="btn-blue" onclick="exportData()" style="width:100%">⬇ Tüm Veritabanını İndir (JSON)</button>
+        <p style="color:#64748b;font-size:11px;margin-top:6px">Deploy öncesi buradan yedek al, deploy sonrası geri yükle.</p>
+      </div>
+      <div>
+        <label>JSON Yedek Dosyası Seç</label>
+        <input type="file" id="importFile" accept=".json" style="color:#e2e8f0">
+        <button class="btn-green" onclick="importData()" style="margin-top:6px;width:100%">⬆ Geri Yükle</button>
+      </div>
+    </div>
+    <div id="backupMsg" class="msg"></div>
+  </div>
+
   <!-- Oturum Geçmişi -->
   <div class="card">
     <h2>Oturum Geçmişi</h2>
@@ -180,7 +197,10 @@ function renderTable(licenses, pass) {
       <td style="text-align:center;color:#38bdf8;font-weight:700">${l.total_runs||0}</td>
       <td class="mono" style="color:${profitColor};font-weight:700">${(l.total_profit||0)>=0?'+':''}${(l.total_profit||0).toFixed(2)} TL</td>
       <td style="color:#64748b;font-size:11px">${l.note||'—'}</td>
-      <td>${l.activated?`<button class="reset-btn" onclick="doReset('${l.key}','${pass}')">Sıfırla</button>`:'—'}</td>
+      <td style="display:flex;gap:4px">
+        ${l.activated?`<button class="reset-btn" onclick="doReset('${l.key}','${pass}')">Sıfırla</button>`:'—'}
+        ${l.total_runs>0?`<button class="reset-btn" style="border-color:#f59e0b;color:#fbbf24" onclick="doResetStats('${l.key}','${pass}')">Stats</button>`:''}
+      </td>
     </tr>`;
   }
   html += '</tbody></table>';
@@ -205,6 +225,37 @@ async function doResetField() {
   const d = await api('/admin/reset',{password:pass,key});
   showMsg('resetMsg',d.msg||(d.ok?'Sıfırlandı':'Hata'),d.ok);
   if(d.ok)loadLicenses();
+}
+
+async function exportData() {
+  const pass = document.getElementById('adminPass').value;
+  if (!pass) { alert('Önce şifre girin'); return; }
+  const r = await fetch(SERVER + '/admin/export?password=' + encodeURIComponent(pass));
+  const d = await r.json();
+  if (!d.ok) { alert(d.msg); return; }
+  const blob = new Blob([JSON.stringify(d, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'piero_backup_' + new Date().toISOString().slice(0,10) + '.json';
+  a.click();
+  showMsg('backupMsg', '✓ Yedek indirildi: ' + d.licenses.length + ' lisans, ' + d.sessions.length + ' oturum', true);
+}
+
+async function importData() {
+  const pass = document.getElementById('adminPass').value;
+  const file = document.getElementById('importFile').files[0];
+  if (!pass) { showMsg('backupMsg','Şifre girin.',false); return; }
+  if (!file) { showMsg('backupMsg','Dosya seçin.',false); return; }
+  const text = await file.text();
+  let data;
+  try { data = JSON.parse(text); } catch { showMsg('backupMsg','Geçersiz JSON dosyası.',false); return; }
+  const d = await api('/admin/import', {password: pass, licenses: data.licenses || []});
+  if (d.ok) {
+    showMsg('backupMsg', '✓ ' + d.added + ' eklendi, ' + d.updated + ' güncellendi.', true);
+    loadLicenses();
+  } else {
+    showMsg('backupMsg', d.msg || 'Hata', false);
+  }
 }
 
 async function loadSessions() {
@@ -240,6 +291,13 @@ async function loadSessions() {
     html += '</tbody></table>';
     document.getElementById('sessionTable').innerHTML = html;
   } catch { showMsg('sessionMsg','Sunucuya bağlanılamadı.',false); }
+}
+
+async function doResetStats(key, pass) {
+  if (!confirm(key + ' istatistikleri sıfırlansın mı? (kâr, süre, oturum geçmişi silinir)')) return;
+  const d = await api('/admin/resetstats', {password: pass, key});
+  alert(d.msg);
+  loadLicenses();
 }
 
 async function doReset(key,pass) {
