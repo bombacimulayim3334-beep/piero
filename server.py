@@ -7,12 +7,7 @@ import sqlite3, os, hashlib, datetime
 app = Flask(__name__)
 
 ADMIN_PASSWORD = "piero2024admin"
-import pathlib
-
-# Railway'de kalıcı veri için /data volume kullan
-# Yoksa script dizinini kullan
-_data_dir = pathlib.Path("/data") if pathlib.Path("/data").exists() else pathlib.Path(".")
-DB_PATH = str(_data_dir / "licenses.db")
+DB_PATH = "licenses.db"
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
