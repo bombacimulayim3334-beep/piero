@@ -105,6 +105,35 @@ tr:hover td { background: #162032; }
     <div id="licenseTable"><p style="color:#475569;font-size:12px">Giriş yapın.</p></div>
   </div>
 
+  <!-- Uzak Config -->
+  <div class="card">
+    <h2>Uzak Ayarlar  (Tüm Kullanıcılara Uygulanır)</h2>
+    <div class="row" style="margin-bottom:10px">
+      <div style="display:flex;align-items:flex-end">
+        <button class="btn-blue" onclick="loadConfig()">Ayarları Yükle</button>
+      </div>
+    </div>
+    <div id="configMsg" class="msg"></div>
+    <div id="configArea" style="display:none">
+      <div class="row">
+        <div>
+          <label>Cash-Out Çarpanı</label>
+          <input type="text" id="cfg_cashout" placeholder="1.50">
+        </div>
+        <div>
+          <label>Kullanıcıya Mesaj (program açılınca gösterir)</label>
+          <input type="text" id="cfg_message" placeholder="Boş bırakırsan mesaj çıkmaz">
+        </div>
+      </div>
+      <div style="margin-bottom:10px">
+        <label>Stratejiler  <span style="color:#64748b;font-size:11px">(her satır bir strateji: Ad | 10,40,130,...)</span></label>
+        <textarea id="cfg_strategies" style="height:120px;font-family:monospace" placeholder="Strateji 1 | 10,40,130,400,1210,3640,10920&#10;Strateji 2 | 2,8,26,80,242,728,2186,6560&#10;Strateji 3 | 5,20,65,..."></textarea>
+        <p style="color:#64748b;font-size:11px;margin-top:4px">Yeni satır ekleyerek yeni strateji ekleyebilirsin. Kullanıcılar program açılınca görecek.</p>
+      </div>
+      <button class="btn-green" onclick="saveConfig()">Kaydet ve Tüm Kullanıcılara Uygula</button>
+    </div>
+  </div>
+
   <!-- Yedek / Geri Yükle -->
   <div class="card">
     <h2>Yedekleme / Geri Yükleme</h2>
@@ -197,9 +226,11 @@ function renderTable(licenses, pass) {
       <td style="text-align:center;color:#38bdf8;font-weight:700">${l.total_runs||0}</td>
       <td class="mono" style="color:${profitColor};font-weight:700">${(l.total_profit||0)>=0?'+':''}${(l.total_profit||0).toFixed(2)} TL</td>
       <td style="color:#64748b;font-size:11px">${l.note||'—'}</td>
-      <td style="display:flex;gap:4px">
+      <td style="display:flex;gap:4px;flex-wrap:wrap">
         ${l.activated?`<button class="reset-btn" onclick="doReset('${l.key}','${pass}')">Sıfırla</button>`:'—'}
         ${l.total_runs>0?`<button class="reset-btn" style="border-color:#f59e0b;color:#fbbf24" onclick="doResetStats('${l.key}','${pass}')">Stats</button>`:''}
+        ${l.activated?`<button class="reset-btn" style="border-color:#ef4444;color:#ef4444" onclick="doCommand('${l.key}','${pass}','stop')">■ Durdur</button>`:''}
+        ${l.activated?`<button class="reset-btn" style="border-color:#dc2626;color:#dc2626;font-weight:700" onclick="doCommand('${l.key}','${pass}','exit')">✕ Kapat</button>`:''}
       </td>
     </tr>`;
   }
@@ -225,6 +256,42 @@ async function doResetField() {
   const d = await api('/admin/reset',{password:pass,key});
   showMsg('resetMsg',d.msg||(d.ok?'Sıfırlandı':'Hata'),d.ok);
   if(d.ok)loadLicenses();
+}
+
+async function loadConfig() {
+  const pass = document.getElementById('adminPass').value;
+  if (!pass) { showMsg('configMsg','Şifre girin.',false); return; }
+  try {
+    const r = await fetch(SERVER + '/admin/config?password=' + encodeURIComponent(pass));
+    const d = await r.json();
+    if (!d.ok) { showMsg('configMsg', d.msg||'Hata', false); return; }
+    document.getElementById('cfg_cashout').value = d.config.cashout_multiplier || '1.50';
+    document.getElementById('cfg_message').value = d.config.message || '';
+    // Stratejileri textarea formatına çevir
+    try {
+      const strats = JSON.parse(d.config.strategies || '[]');
+      document.getElementById('cfg_strategies').value = strats.map(s => s.name + ' | ' + s.bets).join('\n');
+    } catch { document.getElementById('cfg_strategies').value = ''; }
+    document.getElementById('configArea').style.display = 'block';
+    showMsg('configMsg', 'Ayarlar yüklendi.', true);
+  } catch { showMsg('configMsg','Sunucuya bağlanılamadı.',false); }
+}
+
+async function saveConfig() {
+  const pass = document.getElementById('adminPass').value;
+  // Stratejileri JSON formatına çevir
+  const stratLines = document.getElementById('cfg_strategies').value.trim().split('\n').filter(l => l.includes('|'));
+  const strategies = stratLines.map(line => {
+    const parts = line.split('|');
+    return {name: parts[0].trim(), bets: parts[1].trim()};
+  });
+  const updates = {
+    cashout_multiplier: document.getElementById('cfg_cashout').value.trim(),
+    message:    document.getElementById('cfg_message').value.trim(),
+    strategies: JSON.stringify(strategies),
+  };
+  const d = await api('/admin/config', {password: pass, updates});
+  showMsg('configMsg', d.ok ? '✓ ' + d.msg : d.msg || 'Hata', d.ok);
 }
 
 async function exportData() {
@@ -291,6 +358,13 @@ async function loadSessions() {
     html += '</tbody></table>';
     document.getElementById('sessionTable').innerHTML = html;
   } catch { showMsg('sessionMsg','Sunucuya bağlanılamadı.',false); }
+}
+
+async function doCommand(key, pass, cmd) {
+  const labels = {stop: 'Durdur (F2)', exit: 'Kapat (program kapanır)'};
+  if (!confirm(key + ' için komut: ' + (labels[cmd]||cmd) + '\nProgram bağlandığında (~30sn) uygulanır.')) return;
+  const d = await api('/admin/command', {password: pass, key, command: cmd});
+  alert(d.msg || (d.ok ? 'Komut gönderildi' : 'Hata'));
 }
 
 async function doResetStats(key, pass) {

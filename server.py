@@ -35,6 +35,27 @@ def init_db():
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS commands (
+            key        TEXT PRIMARY KEY,
+            command    TEXT DEFAULT NULL,
+            issued_at  TEXT DEFAULT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS remote_config (
+            key    TEXT PRIMARY KEY,
+            value  TEXT NOT NULL
+        )
+    """)
+    # Varsayılan config değerleri
+    defaults = [
+        ("cashout_multiplier", "1.50"),
+        ("message", ""),
+        ("strategies", '[{"name":"Strateji 1","bets":"10,40,130,400,1210,3640,10920"},{"name":"Strateji 2","bets":"2,8,26,80,242,728,2186,6560"}]'),
+    ]
+    for k, v in defaults:
+        conn.execute("INSERT OR IGNORE INTO remote_config (key, value) VALUES (?, ?)", (k, v))
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             key        TEXT NOT NULL,
