@@ -315,6 +315,48 @@ def admin_import():
     conn.close()
     return jsonify({"ok": True, "added": added, "updated": updated})
 
+# ── KOMUT — Program tarafından çekilir (30sn'de bir) ───────────────────────
+@app.route("/command", methods=["POST"])
+def get_command():
+    data = request.get_json(silent=True) or {}
+    key  = str(data.get("key",  "")).upper().strip()
+    hwid = str(data.get("hwid", "")).strip()
+    conn = get_db()
+    row  = conn.execute("SELECT * FROM licenses WHERE key=?", (key,)).fetchone()
+    if not row or row["activated"] != 1 or row["hwid"] != hash_hwid(hwid):
+        conn.close()
+        return jsonify({"ok": False}), 403
+    cmd_row = conn.execute("SELECT command FROM commands WHERE key=?", (key,)).fetchone()
+    if not cmd_row or not cmd_row["command"]:
+        conn.close()
+        return jsonify({"ok": True, "command": None})
+    command = cmd_row["command"]
+    conn.execute("UPDATE commands SET command=NULL, issued_at=NULL WHERE key=?", (key,))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "command": command})
+
+# ── ADMİN: Komut Gönder ─────────────────────────────────────────────────────
+@app.route("/admin/command", methods=["POST"])
+def admin_command():
+    data    = request.get_json(silent=True) or {}
+    if data.get("password") != ADMIN_PASSWORD:
+        return jsonify({"ok": False, "msg": "Yetkisiz"}), 401
+    key     = str(data.get("key",     "")).upper().strip()
+    command = str(data.get("command", "")).strip()
+    conn = get_db()
+    if not conn.execute("SELECT key FROM licenses WHERE key=?", (key,)).fetchone():
+        conn.close()
+        return jsonify({"ok": False, "msg": "Lisans bulunamadı"}), 404
+    now = datetime.datetime.utcnow().isoformat(timespec="seconds")
+    conn.execute(
+        "INSERT OR REPLACE INTO commands (key, command, issued_at) VALUES (?, ?, ?)",
+        (key, command, now)
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "msg": key + " → '" + command + "' komutu gönderildi"})
+
 # ── ADMİN PANELİ ────────────────────────────────────────────────────────────
 @app.route("/admin")
 def admin_panel():
