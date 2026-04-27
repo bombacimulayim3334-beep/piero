@@ -75,7 +75,7 @@ def hash_hwid(hwid):
 
 def validate_key(key):
     parts = key.upper().split("-")
-    if len(parts) != 4 or parts[0] != "PIERO":
+    if len(parts) != 4 or parts[0] not in ("PIERO", "OYUN"):
         return False
     try:
         a, b, c = int(parts[1]), int(parts[2]), int(parts[3])
